@@ -81,7 +81,8 @@ let m3u8stream = ((playlistURL: string, options: m3u8stream.Options = {}): m3u8s
 
   let segmentNumber = 0;
   let downloaded = 0;
-  const requestQueue = new Queue((segment: Item, callback: Callback): void => {
+  let lastRequestErrorCount = 0;
+  const requestQueueWorker = (segment: Item, callback: Callback) => {
     let reqOptions = Object.assign({}, requestOptions);
     if (segment.range) {
       reqOptions.headers = Object.assign({}, reqOptions.headers, {
@@ -89,7 +90,15 @@ let m3u8stream = ((playlistURL: string, options: m3u8stream.Options = {}): m3u8s
       });
     }
     let req = miniget(new URL(segment.url, playlistURL).toString(), reqOptions);
-    req.on('error', callback);
+    req.on('error', err => {
+      if (lastRequestErrorCount++ < 5) {
+        setTimeout(() => {
+          requestQueueWorker(segment, callback);
+        }, 1000);
+      } else {
+        callback(err);
+      }
+    });
     forwardEvents(req);
     streamQueue.push(req, (_, size) => {
       downloaded += +size;
@@ -101,7 +110,8 @@ let m3u8stream = ((playlistURL: string, options: m3u8stream.Options = {}): m3u8s
       }, requestQueue.total, downloaded);
       callback(null);
     });
-  }, { concurrency: chunkReadahead });
+  };
+  const requestQueue = new Queue(requestQueueWorker, { concurrency: chunkReadahead });
 
   const onError = (err: Error): void => {
     stream.emit('error', err);
@@ -137,13 +147,22 @@ let m3u8stream = ((playlistURL: string, options: m3u8stream.Options = {}): m3u8s
   let lastSeq: number;
   let starttime = 0;
 
+  let lastFailCount = 0;
+
   const refreshPlaylist = (): void => {
     lastRefresh = Date.now();
     currPlaylist = miniget(playlistURL, requestOptions);
-    currPlaylist.on('error', onError);
+    currPlaylist.on('error', err => {
+      if (lastFailCount++ < 5) {
+        setTimeout(refreshPlaylist, 3000);
+      } else {
+        onError(err);
+      }
+    });
     forwardEvents(currPlaylist);
     const parser = currPlaylist.pipe(new Parser(options.id));
     parser.on('starttime', (a: number) => {
+      lastFailCount = 0;
       if (starttime) { return; }
       starttime = a;
       if (typeof options.begin === 'string' && begin >= 0) {
