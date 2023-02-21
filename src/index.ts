@@ -68,20 +68,23 @@ let m3u8stream = ((playlistURL: string, options: m3u8stream.Options = {}): m3u8s
     }
   };
 
+  let lastRequestErrorCount = 0;
   let currSegment: miniget.Stream | null;
   const streamQueue = new Queue((req: miniget.Stream, callback): void => {
     currSegment = req;
     // Count the size manually, since the `content-length` header is not
     // always there.
     let size = 0;
-    req.on('data', (chunk: Buffer) => size += chunk.length);
+    req.on('data', (chunk: Buffer) => {
+      lastRequestErrorCount = 0;
+      size += chunk.length;
+    });
     req.pipe(stream, { end: false });
     req.on('end', () => callback(null, size));
   }, { concurrency: 1 });
 
   let segmentNumber = 0;
   let downloaded = 0;
-  let lastRequestErrorCount = 0;
   const requestQueueWorker = (segment: Item, callback: Callback) => {
     let reqOptions = Object.assign({}, requestOptions);
     if (segment.range) {
